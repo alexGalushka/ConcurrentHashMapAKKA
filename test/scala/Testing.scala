@@ -3,6 +3,7 @@
  */
 
 
+import org.cscie54.a3.{RealEstateListingsImpl, RealEstateListings}
 import org.scalatest._
 import org.scalatest.concurrent.ScalaFutures
 import scala.concurrent.{Future}
@@ -125,6 +126,36 @@ class Testing extends FunSuite{
     threadList.foreach(_.join())
 
     assert (totalOrder.getValue === 150)
+  }
+/*
+  test("testing RealEstate")
+  {
+    val realEstate: RealEstateListings = new RealEstateListingsImpl(5)
+
+    val t1 = thread (realEstate.addListing("165 Bridle", 300))
+    val t2 = thread (realEstate.addListing("167 Bridle", 200))
+    val t3 = thread (realEstate.addListing("1023 Beacon", 900))
+    val t4 = thread (realEstate.addListing("1024 Beacon", 950))
+
+    t1.join();t2.join();t3.join();t4.join()
+
+    assert (realEstate.getTotalNumber === 4)
+    assert (realEstate.getTotalValue === 2350)
+  }
+ */
+  test("testing RealEstate 2")
+  {
+    val realEstate: RealEstateListings = new RealEstateListingsImpl(3)
+
+    val t1 = thread (realEstate.addListing("165 Bridle", 300))
+    val t2 = thread (realEstate.addListing("167 Bridle", 200))
+    val t3 = thread (realEstate.addListing("1023 Beacon", 900))
+    val t4 = thread (realEstate.addListing("1024 Beacon", 950))
+
+    t1.join();t2.join();t3.join();t4.join()
+
+    assert (realEstate.getTotalNumber === 3)
+    assert (realEstate.getTotalValue === 2350)
   }
 
   /*
