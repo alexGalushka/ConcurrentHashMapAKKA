@@ -1,8 +1,11 @@
 package org.cscie54.a3
 
-import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
+import java.util
+import java.util.concurrent.atomic.{AtomicLong, AtomicInteger, AtomicReference}
 import java.lang.IllegalStateException
 import java.lang.IllegalArgumentException
+import java.util.concurrent.locks.{ReentrantReadWriteLock, ReadWriteLock}
+import scala.collection.mutable.Queue
 
 import scala.util.{Failure, Try}
 
@@ -65,25 +68,69 @@ trait RealEstateListings {
 
 class RealEstateListingsImpl (realEstListingsNum: Int) extends RealEstateListings
 {
-  private final val trackedListingsLimitNum = realEstListingsNum
-
   private val currentTrackedListingsNum = new AtomicInteger(0)
 
+  private val readWriteLock : ReadWriteLock = new ReentrantReadWriteLock()
+
+  private val readLock = readWriteLock.readLock()
+
+  private final val trackedListingsLimitNum = realEstListingsNum
+
+  private val totalValue = new AtomicLong(0)
+
   private val listings = new AtomicReference(Map[String, Int]())
+
+  private val backLogListings = new AtomicReference(Queue[(String,Int)]())
+
+  var berb =  backLogListings.get()
+  berb.enqueue(("hi", 88))
+
+  var dfdf = berb.dequeue()
+
+  /**
+   * atomically update the totalValue
+   * @param value
+   * @return
+   */
+  private def updateTotalValue(value: Int) = {
+    var v: Long = 0
+    // check for tracked listing number first
+    do
+    {
+      v = totalValue.get()
+    } while (!totalValue.compareAndSet(v, v+value))
+  }
+
+  /**
+   * atomically update the currentTrackedListingsNum
+   * @param ifIncrement, true to increment, false to decrement
+   * @return
+   */
+  private def changeCurrentTrackedListingsNum(ifIncrement: Boolean): Int = {
+    var v: Integer = 0
+    // check for tracked listing number first
+    if(ifIncrement)
+    {
+      do {
+        v = currentTrackedListingsNum.get()
+      } while (!currentTrackedListingsNum.compareAndSet(v, v + 1))
+      v + 1
+    }
+    else
+    {
+      do
+      {
+        v = currentTrackedListingsNum.get()
+      } while (!currentTrackedListingsNum.compareAndSet(v, v - 1))
+      v - 1
+    }
+  }
 
   def getCurrentPrice(address: String): Try[Int] = ???
 
   def tryAddListing(address: String, price: Int): Try[Unit] = Try
   {
-    var v: Integer = 0
-    // check for tracked listing number first
-    do
-    {
-      v = currentTrackedListingsNum.get()
-    } while (!currentTrackedListingsNum.compareAndSet(v, v+1))
-    v+1
-
-    if(v+1 <= trackedListingsLimitNum)
+    if(changeCurrentTrackedListingsNum(true) <= trackedListingsLimitNum)
     {
       var tempMap =  Map.empty[String, Int]
       var newTempMap = Map.empty[String, Int]
@@ -93,34 +140,121 @@ class RealEstateListingsImpl (realEstListingsNum: Int) extends RealEstateListing
         if(tempMap.contains(address))
         {
           // have to roll back the currentTrackedListingsNum if failure!
-          do
-          {
-            v = currentTrackedListingsNum.get()
-          } while (!currentTrackedListingsNum.compareAndSet(v, v-1))
+          changeCurrentTrackedListingsNum(false)
 
-          Failure[IllegalArgumentException]
+          return Try {Failure{new IllegalArgumentException}}
         }
         else
         {
-           newTempMap = tempMap ++ Map(address, price)
+           newTempMap = tempMap ++ Map(address -> price)
         }
       }while (!listings.compareAndSet(tempMap, newTempMap))
+
+      // update the total value of all real estate listings
+      updateTotalValue(price)
     }
     else
     {
-      Failure[IllegalStateException]
+      return Try{Failure{new IllegalStateException}}
     }
   }
 
-  def addListing(address: String, price: Int): Try[Unit] = ???
+  def addListing(address: String, price: Int): Try[Unit] = Try
+  {
+    // check for tracked listing number first
+    if(changeCurrentTrackedListingsNum(true) <= trackedListingsLimitNum)
+    {
+      var tempMap =  Map.empty[String, Int]
+      var newTempMap = Map.empty[String, Int]
+      do
+      {
+        tempMap = listings.get()
+        if(tempMap.contains(address))
+        {
+          // have to roll back the currentTrackedListingsNum if failure!
+          changeCurrentTrackedListingsNum(false)
+          return Try{Failure{new IllegalArgumentException}}
+        }
+        else
+        {
+          newTempMap = tempMap ++ Map(address -> price)
+        }
+      }while (!listings.compareAndSet(tempMap, newTempMap))
+
+      updateTotalValue(price)
+    }
+    else
+    {
+      // add to back log of listings
+      var tempBackLogListings = Queue.empty[(String,Int)]
+      var newTempBackLogListings = Queue.empty[(String,Int)]
+      do
+      {
+        tempBackLogListings = backLogListings.get()
+        newTempBackLogListings ++= tempBackLogListings
+        newTempBackLogListings.enqueue((address, price))
+
+      }while (!backLogListings.compareAndSet(tempBackLogListings, newTempBackLogListings))
+    }
+  }
 
   def updatePrice(address: String, price: Int): Try[Unit] = ???
 
-  def removeListing(address: String): Try[Unit] = ???
+  def removeListing(address: String): Try[Unit] = Try {
 
-  def getTotalNumber: Int = ???
+    var tempMap =  Map.empty[String, Int]
+    var newTempMap = Map.empty[String, Int]
+    do
+    {
+      tempMap = listings.get()
+      newTempMap ++= tempMap
+      if(!tempMap.contains(address))
+      {
+        // there is a concern when multiple threads are spawned
+        // few of them set the value, one trying to remove the value other thread trying to set, since the thread execution order is not guaranteed
+        // the behaviour is not deterministic, it could throw the error
+        return Try {Failure{new IllegalArgumentException}}
+      }
+      else
+      {
+        newTempMap = newTempMap.-(address)
+        //have to set update currentTrackedListingsNum
+        changeCurrentTrackedListingsNum(false)
+        // update total value
+        // updateTotalValue(-price)
 
-  def getTotalValue: Long = ???
+        //try to push backlogged listings
+      }
+    }while (!listings.compareAndSet(tempMap, newTempMap))
+
+  }
+
+  def getTotalNumber: Int =
+  {
+    readLock.lock()
+    try
+    {
+      currentTrackedListingsNum.get()
+    }
+    finally
+    {
+      readLock.unlock()
+    }
+  }
+
+  def getTotalValue: Long = {
+
+    readLock.lock()
+    try
+    {
+      totalValue.get()
+    }
+    finally
+    {
+      readLock.unlock()
+    }
+
+  }
 
   def getAllSortedByPrice: Iterable[(String, Int)] = ???
 

@@ -20,19 +20,13 @@ class Join {
           override def run(): Unit = {
             startGate.await()
             try{
-              task
+              task()
             }finally{
               endGate.countDown()
             }
           }
         }
         t.start()
-
-        //val start = System.nanoTime()
-        //startGate.await()
-        //val end = System.nanoTime()
-        //end - start
-
     }
   }
 
