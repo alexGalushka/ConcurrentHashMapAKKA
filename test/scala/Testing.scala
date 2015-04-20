@@ -6,7 +6,8 @@
 import org.cscie54.a3.{RealEstateListingsImpl, RealEstateListings}
 import org.scalatest._
 import org.scalatest.concurrent.ScalaFutures
-import scala.concurrent.{Future}
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 import scala.concurrent.ExecutionContext.Implicits.global
 import java.util.ConcurrentModificationException
 import org.scalatest.FlatSpec
@@ -15,21 +16,10 @@ import org.cscie54.a3.warmup._
 import java.util.concurrent.CopyOnWriteArrayList
 import scala.collection.mutable.ListBuffer
 import scala.collection.mutable.ListBuffer
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.util.{Failure, Success, Try}
 
-class Testing extends FunSuite{
-
-
-  // first create a listing
-
-  // get the price and verify if it's valid
-
-
-  // threads:
-
-
-  // how to test for dead lock
-
-  // give the write load
+class Testing extends FunSuite with Matchers with ScalaFutures{
 
   def thread(body: =>Unit): Thread =
   {
@@ -127,8 +117,8 @@ class Testing extends FunSuite{
 
     assert (totalOrder.getValue === 150)
   }
-/*
-  test("testing RealEstate")
+
+  test("normal positive testing of RealEstate")
   {
     val realEstate: RealEstateListings = new RealEstateListingsImpl(5)
 
@@ -142,74 +132,136 @@ class Testing extends FunSuite{
     assert (realEstate.getTotalNumber === 4)
     assert (realEstate.getTotalValue === 2350)
   }
- */
-  test("testing RealEstate 2")
+
+  test("in sequence edge case negative testing of RealEstate")
+  {
+    //for (i<- 0 until 200) {
+      val realEstate: RealEstateListings = new RealEstateListingsImpl(3)
+
+      realEstate.addListing("165 Bridle", 300)
+      //println(t1.getId)
+      realEstate.addListing("167 Bridle", 200)
+      //println(t2.getId)
+      realEstate.addListing("1023 Beacon", 900)
+      //println(t3.getId)
+      realEstate.addListing("1024 Beacon", 950)
+      //println(t4.getId)
+      //println(i)
+      assert(realEstate.getTotalNumber === 3)
+    //}
+  }
+
+  test("with futures: edge case negative testing of RealEstate")
+  {
+
+    val realEstate: RealEstateListings = new RealEstateListingsImpl(3)
+
+    val tasks: Seq[Future[Try[Unit]]] = for (i <- 1 to 4) yield Future {
+      realEstate.addListing("16" + i.toString + " Bridle", 100 * i)
+    }
+
+    val aggregated: Future[Seq[Try[Unit]]] = Future.sequence(tasks)
+
+    //val squares: Seq[Try[Unit]] = Await.ready(aggregated, Duration.Inf).value.get match {
+    //  case Success(result) => result
+    //}
+
+    whenReady(aggregated) { result =>
+      assert(realEstate.getTotalNumber === 3)
+      assert((realEstate.getAllSortedByPrice.toList(0)._2 < realEstate.getAllSortedByPrice.toList(1)._2) === true )
+      assert(realEstate.getAllSortedByPrice.size === 3 )
+      assert(realEstate.getCurrentPrice("161 Bridle") === Success(100))
+      //assert(realEstate.getCurrentPrice("160 Bridle") === Failure(new IllegalArgumentException))
+      //an [IllegalArgumentException] should be thrownBy {realEstate.getCurrentPrice("160 Bridle")}
+      //val thrown = intercept[Exception] {realEstate.getCurrentPrice("160 Bridle")}
+      //assert(thrown.getMessage === "Get Price Exception")
+
+      val failureMessage = realEstate.getCurrentPrice("160 Bridle") match
+      {
+        case Failure (failE) => failE.toString
+      }
+      assert(failureMessage === "java.lang.IllegalArgumentException")
+
+    }
+
+  }
+
+
+  test("with futures: removeListing of RealEstate")
+  {
+    val realEstate: RealEstateListings = new RealEstateListingsImpl(4)
+
+    val tasks: Seq[Future[Try[Unit]]] = for (i <- 1 to 4) yield Future {
+      if(i==2)
+      {
+        realEstate.removeListing("161 Bridle")
+      }
+      realEstate.addListing("16" + i.toString + " Bridle", 100 * i)
+    }
+
+    val aggregated: Future[Seq[Try[Unit]]] = Future.sequence(tasks)
+
+    whenReady(aggregated) { result =>
+      assert(realEstate.getTotalNumber === 3)
+    }
+  }
+
+  test("with futures: updatePrice of RealEstate")
+  {
+    val realEstate: RealEstateListings = new RealEstateListingsImpl(4)
+
+    val tasks: Seq[Future[Try[Unit]]] = for (i <- 1 to 4) yield Future {
+      if(i==2)
+      {
+        realEstate.updatePrice("161 Bridle", 700)
+      }
+      realEstate.addListing("16" + i.toString + " Bridle", 100 * i)
+    }
+
+    val aggregated: Future[Seq[Try[Unit]]] = Future.sequence(tasks)
+
+    whenReady(aggregated) { result =>
+      assert(realEstate.getCurrentPrice("161 Bridle") === Success(700))
+    }
+  }
+
+  test("with futures: <backlog to lisitings> of RealEstate")
   {
     val realEstate: RealEstateListings = new RealEstateListingsImpl(3)
 
-    val t1 = thread (realEstate.addListing("165 Bridle", 300))
-    val t2 = thread (realEstate.addListing("167 Bridle", 200))
-    val t3 = thread (realEstate.addListing("1023 Beacon", 900))
-    val t4 = thread (realEstate.addListing("1024 Beacon", 950))
-
-    t1.join();t2.join();t3.join();t4.join()
-
-    assert (realEstate.getTotalNumber === 3)
-    assert (realEstate.getTotalValue === 2350)
-  }
-
-  /*
-  def testAccountUnsafe(): Unit = {
-    val a2 = new Account2()
-    try {
-      val range = (1 to 1000)
-      range.par.foreach { i =>
-        // if this method is not thread-safe it should throw an error
-        a2.adjustBalance(1)
+    val testdata: ListBuffer[(String, Int)] = new ListBuffer()
+    val tasks: Seq[Future[Try[Unit]]] = for (i <- 1 to 4) yield Future {
+      if(i==2)
+      {
+        realEstate.removeListing("161 Bridle")
       }
-      throw new Exception("This should have worked")
+      val tupleData = ("16" + i.toString + " Bridle", 100 * i)
+      testdata.+=(tupleData)
+      realEstate.addListing(tupleData._1, tupleData._2)
     }
-    // catch ConcurrencyExceptions thrown in adjustBalance()
-    catch {
-      case e: ConcurrencyException =>
-    }
-  }
 
+    val aggregated: Future[Seq[Try[Unit]]] = Future.sequence(tasks)
 
-  def testAccount2(): Unit = {
-    val a1 = new Account2()
-    val range = (1 to 1000)
-    range.par.foreach { i =>
-      // if this method is not thread-safe this will sometimes throw an error
-      a1.adjustBalance(1)
-    }
-  }
+    whenReady(aggregated) { result =>
+      val listingTupleList = realEstate.getAllSortedByPrice.toList
+      val listingTuple = realEstate.getAllSortedByPrice.toList(1) // listing to remove
+      realEstate.removeListing(listingTuple._1) //after removing the above listing backlog should push entry to listings
 
+      val excludedListings = testdata -- listingTupleList
 
-    def testJoin(): Unit = {
-      import scala.util.Sorting
-
-      val dumpster = new CopyOnWriteArrayList[Int]
-      val tasks: Traversable[Unit => Unit]  = {
-        val temp = new ListBuffer[Unit=>Unit]
-        for (i<- 0 to 99){
-          temp.append(_ => for (_ <- 0 to 99)dumpster.add(i) )
-        }
-        temp
+      val listingTupleFinal = realEstate.getAllSortedByPrice.toList
+      //for convinience:
+      val pseudoTuplesList = listingTupleFinal.map { myTuple =>
+        myTuple._1 + myTuple._2.toString
       }
 
-      val j = new Join()
-      j.join(tasks)
-      //    println(dumpster.toString())
-      //    println(dumpster.size)
-      assert(dumpster.toArray != dumpster.toArray.sorted)
-
+      for (i<-0 until excludedListings.size)
+      {
+        var tempString = excludedListings(0)._1 + excludedListings(0)._2.toString
+        assert(pseudoTuplesList.contains(tempString) == true)     //check if backlog listing has been added to listings
+      }
     }
+  }
 
-  */
-  //testAcccount()
-  //testAccountUnsafe()
-  //testAccount2()
-  //testJoin()
 
 }
